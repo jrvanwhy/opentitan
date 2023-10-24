@@ -36,3 +36,9 @@ alias(
     actual = "@tock_index__libm-0.2.8//:libm",
     tags = ["manual"],
 )
+
+alias(
+    name = "serde-json-core",
+    actual = "@tock_index__serde-json-core-0.5.1//:serde_json_core",
+    tags = ["manual"],
+)

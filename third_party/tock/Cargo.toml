@@ -18,3 +18,6 @@ ghash = "0.4.4"
 
 # libtock's ninedof API needs libm
 libm = "0.2.7"
+
+# Used by the syscall tunnel.
+serde-json-core = "0.5.1"
