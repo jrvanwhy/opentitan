@@ -48,7 +48,8 @@ SECTIONS {
         . += 384; /* rsa_modulus */
         . += 4;   /* address_translation */
         . += 4;   /* identifier */
-        . += 4;   /* manifest_version */
+        SHORT(0x6c47); /* . = . + 2; manifest_version.minor */
+        SHORT(0x71c3); /* . = . + 2; manifest_version.major */
         . += 4;   /* signed_region_end */
         . += 4;   /* length */
         . += 4;   /* version_major */
@@ -57,8 +58,8 @@ SECTIONS {
         . += 8;   /* timestamp */
         . += 32;  /* binding_value */
         . += 4;   /* max_key_version */
-        . += 4;   /* code_start */
-        . += 4;   /* code_end */
+        LONG(_stext - ORIGIN(rom)); /* . = . + 4; code_start */
+        LONG(_etext - ORIGIN(rom)); /* . = . + 4; code_end */
         LONG(_stext - ORIGIN(rom)); /* . = . + 4; entry_point */
         /* manifest extension table */
         /* see: sw/device/silicon_creator/lib/base/chip.h */

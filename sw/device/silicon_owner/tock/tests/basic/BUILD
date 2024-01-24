@@ -4,7 +4,7 @@
 
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
-load("//rules:signing.bzl", "sign_binary")
+load("//rules:signing.bzl", "sign_bin")
 load("//rules:tock.bzl", "tock_elf2tab", "tock_image")
 load("//rules/opentitan:defs.bzl", "EARLGREY_SILICON_OWNER_ROM_EXT_ENVS", "OPENTITAN_CPU", "cw310_params", "fpga_params", "opentitan_test", "silicon_params")
 
@@ -37,6 +37,13 @@ tock_image(
     kernel = "//sw/device/silicon_owner/tock/tests:test_kernel",
 )
 
+sign_bin(
+    name = "image_signed",
+    bin = ":image",
+    rsa_key = {"//sw/device/silicon_creator/rom_ext/sival/keys:keyset": "earlgrey_z0_sival_1"},
+    manifest = "//sw/device/silicon_owner:manifest_standard",
+)
+
 opentitan_test(
     name = "basic_test",
     exec_env = dicts.add(EARLGREY_SILICON_OWNER_ROM_EXT_ENVS, {
@@ -46,6 +53,6 @@ opentitan_test(
         binaries = {":image": "firmware"},
     ),
     silicon = silicon_params(
-        binaries = {":image": "firmware"},
+        binaries = {":image_signed": "firmware"},
     ),
 )
