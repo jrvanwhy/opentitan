@@ -40,7 +40,7 @@ use kernel::scheduler::priority::PrioritySched;
 use kernel::utilities::registers::interfaces::ReadWriteable;
 use kernel::{create_capability, debug, static_init};
 use lowrisc::csrng::CsRng;
-use lowrisc::flash_ctrl::FlashMPConfig;
+//use lowrisc::flash_ctrl::FlashMPConfig;
 use rv32i::csr;
 
 pub mod io;
@@ -112,10 +112,10 @@ pub static mut STACK_MEMORY: [u8; 0x1400] = [0; 0x1400];
 
 enum ChipConfig {}
 impl EarlGreyConfig for ChipConfig {
-    const NAME: &'static str = "fpga_cw310";
-    const CPU_FREQ: u32 = 24_000_000;
-    const PERIPHERAL_FREQ: u32 = 6_000_000;
-    const AON_TIMER_FREQ: u32 = 250_000;
+    const NAME: &'static str = "silicon";
+    const CPU_FREQ: u32 = 100_000_000;
+    const PERIPHERAL_FREQ: u32 = 24_000_000;
+    const AON_TIMER_FREQ: u32 = 200_000;
     const UART_BAUDRATE: u32 = 115200;
 }
 
@@ -167,28 +167,6 @@ struct EarlGrey {
             virtual_aes_ccm::VirtualAES128CCM<'static, earlgrey::aes::Aes<'static>>,
         >,
     >,
-    kv_driver: &'static capsules_extra::kv_driver::KVStoreDriver<
-        'static,
-        capsules_extra::virtual_kv::VirtualKVPermissions<
-            'static,
-            capsules_extra::kv_store_permissions::KVStorePermissions<
-                'static,
-                capsules_extra::tickv_kv_store::TicKVKVStore<
-                    'static,
-                    capsules_extra::tickv::TicKVSystem<
-                        'static,
-                        capsules_core::virtualizers::virtual_flash::FlashUser<
-                            'static,
-                            lowrisc::flash_ctrl::FlashCtrl<'static>,
-                        >,
-                        capsules_extra::sip_hash::SipHasher24<'static>,
-                        2048,
-                    >,
-                    [u8; 8],
-                >,
-            >,
-        >,
-    >,
     syscall_filter: &'static TbfHeaderFilterDefaultAllow,
     scheduler: &'static PrioritySched,
     scheduler_timer: &'static VirtualSchedulerTimer<
@@ -214,7 +192,6 @@ impl SyscallDriverLookup for EarlGrey {
             capsules_core::spi_controller::DRIVER_NUM => f(Some(self.spi_controller)),
             capsules_core::rng::DRIVER_NUM => f(Some(self.rng)),
             capsules_extra::symmetric_encryption::aes::DRIVER_NUM => f(Some(self.aes)),
-            capsules_extra::kv_driver::DRIVER_NUM => f(Some(self.kv_driver)),
             _ => f(None),
         }
     }
@@ -252,6 +229,22 @@ impl KernelResources<EarlGreyChip> for EarlGrey {
     fn context_switch_callback(&self) -> &Self::ContextSwitchCallback {
         &()
     }
+}
+
+#[allow(unused)]
+#[inline(always)]
+fn puts(msg: &str) {
+    for &b in msg.as_bytes() {
+        while unsafe {
+            core::ptr::read_volatile(0x4000_0014 as *mut u32) & 0x01 != 0
+        } {}
+        unsafe {
+            core::ptr::write_volatile(0x4000_001c as *mut u8, b);
+        }
+    }
+    while unsafe {
+        core::ptr::read_volatile(0x4000_0014 as *mut u32) & 0b1000 == 0
+    } {}
 }
 
 unsafe fn setup() -> (
@@ -302,6 +295,8 @@ unsafe fn setup() -> (
     let memory_allocation_cap = create_capability!(capabilities::MemoryAllocationCapability);
 
     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(&PROCESSES));
+
+    // But not here
 
     let peripherals = static_init!(
         EarlGreyDefaultPeripherals<ChipConfig, BoardPinmuxLayout>,
@@ -497,29 +492,34 @@ unsafe fn setup() -> (
 
     // Flash setup memory protection for the ROM/Kernel
     // Only allow reads for this region, any other ops will cause an MP fault
-    let mp_cfg = FlashMPConfig {
-        read_en: true,
-        write_en: false,
-        erase_en: false,
-        scramble_en: false,
-        ecc_en: false,
-        he_en: false,
-    };
+    //let mp_cfg = FlashMPConfig {
+    //	read_en: true,
+    //	write_en: false,
+    //	erase_en: false,
+    //	scramble_en: false,
+    //	ecc_en: false,
+    //	he_en: false,
+    //};
 
     // Allocate a flash protection region (associated cfg number: 0), for the code section.
-    if let Err(e) = peripherals.flash_ctrl.mp_set_region_perms(
-        &_manifest as *const u8 as usize,
-        &_etext as *const u8 as usize,
-        0,
-        &mp_cfg,
-    ) {
-        debug!("Failed to set flash memory protection: {:?}", e);
-    } else {
-        // Lock region 0, until next system reset.
-        if let Err(e) = peripherals.flash_ctrl.mp_lock_region_cfg(0) {
-            debug!("Failed to lock memory protection config: {:?}", e);
-        }
-    }
+    //puts("Will set flash region\n");
+    //if let Err(e) = peripherals.flash_ctrl.mp_set_region_perms(
+    //	&_manifest as *const u8 as usize,
+    //	&_etext as *const u8 as usize,
+    //	0,
+    //	&mp_cfg,
+    //) {
+    //	puts("Flash region failed\n");
+    //	debug!("Failed to set flash memory protection: {:?}", e);
+    //} else {
+    //	// Lock region 0, until next system reset.
+    //	puts("Flash region success, lock 0\n");
+    //	if let Err(e) = peripherals.flash_ctrl.mp_lock_region_cfg(0) {
+    //		puts("Flash 0 failed\n");
+    //		debug!("Failed to lock memory protection config: {:?}", e);
+    //	}
+    //}
+    //puts("Flash lock done\n");
 
     // Flash
     let flash_ctrl_read_buf = static_init!(
@@ -535,6 +535,8 @@ unsafe fn setup() -> (
         components::flash_mux_component_static!(lowrisc::flash_ctrl::FlashCtrl),
     );
 
+    puts("mux_flash initialized.\n");
+
     // SipHash
     let sip_hash = static_init!(
         capsules_extra::sip_hash::SipHasher24,
@@ -543,115 +545,125 @@ unsafe fn setup() -> (
     kernel::deferred_call::DeferredCallClient::register(sip_hash);
     SIPHASH = Some(sip_hash);
 
+    puts("sip_hash created.\n");
+
     // TicKV
-    let tickv = components::tickv::TicKVComponent::new(
-        sip_hash,
-        &mux_flash,                                    // Flash controller
-        lowrisc::flash_ctrl::FLASH_PAGES_PER_BANK - 1, // Region offset (End of Bank0/Use Bank1)
-        // Region Size
-        lowrisc::flash_ctrl::FLASH_PAGES_PER_BANK * lowrisc::flash_ctrl::PAGE_SIZE,
-        flash_ctrl_read_buf, // Buffer used internally in TicKV
-        page_buffer,         // Buffer used with the flash controller
-    )
-    .finalize(components::tickv_component_static!(
-        lowrisc::flash_ctrl::FlashCtrl,
-        capsules_extra::sip_hash::SipHasher24,
-        2048
-    ));
+    //let tickv = components::tickv::TicKVComponent::new(
+    //	sip_hash,
+    //	&mux_flash,                                    // Flash controller
+    //	lowrisc::flash_ctrl::FLASH_PAGES_PER_BANK - 1, // Region offset (End of Bank0/Use Bank1)
+    //	// Region Size
+    //	lowrisc::flash_ctrl::FLASH_PAGES_PER_BANK * lowrisc::flash_ctrl::PAGE_SIZE,
+    //	flash_ctrl_read_buf, // Buffer used internally in TicKV
+    //	page_buffer,         // Buffer used with the flash controller
+    //)
+    //.finalize(components::tickv_component_static!(
+    //	lowrisc::flash_ctrl::FlashCtrl,
+    //	capsules_extra::sip_hash::SipHasher24,
+    //	2048
+    //));
     hil::flash::HasClient::set_client(&peripherals.flash_ctrl, mux_flash);
-    sip_hash.set_client(tickv);
-    TICKV = Some(tickv);
+    //sip_hash.set_client(tickv);
+    //TICKV = Some(tickv);
 
-    let kv_store = components::kv::TicKVKVStoreComponent::new(tickv).finalize(
-        components::tickv_kv_store_component_static!(
-            capsules_extra::tickv::TicKVSystem<
-                capsules_core::virtualizers::virtual_flash::FlashUser<
-                    lowrisc::flash_ctrl::FlashCtrl,
-                >,
-                capsules_extra::sip_hash::SipHasher24<'static>,
-                2048,
-            >,
-            capsules_extra::tickv::TicKVKeyType,
-        ),
-    );
+    puts("sip_hash setup.\n");
 
-    let kv_store_permissions = components::kv::KVStorePermissionsComponent::new(kv_store).finalize(
-        components::kv_store_permissions_component_static!(
-            capsules_extra::tickv_kv_store::TicKVKVStore<
-                capsules_extra::tickv::TicKVSystem<
-                    capsules_core::virtualizers::virtual_flash::FlashUser<
-                        lowrisc::flash_ctrl::FlashCtrl,
-                    >,
-                    capsules_extra::sip_hash::SipHasher24<'static>,
-                    2048,
-                >,
-                capsules_extra::tickv::TicKVKeyType,
-            >
-        ),
-    );
+    //let kv_store = components::kv::TicKVKVStoreComponent::new(tickv).finalize(
+    //	components::tickv_kv_store_component_static!(
+    //		capsules_extra::tickv::TicKVSystem<
+    //			capsules_core::virtualizers::virtual_flash::FlashUser<
+    //				lowrisc::flash_ctrl::FlashCtrl,
+    //			>,
+    //			capsules_extra::sip_hash::SipHasher24<'static>,
+    //			2048,
+    //		>,
+    //		capsules_extra::tickv::TicKVKeyType,
+    //	),
+    //);
 
-    let mux_kv = components::kv::KVPermissionsMuxComponent::new(kv_store_permissions).finalize(
-        components::kv_permissions_mux_component_static!(
-            capsules_extra::kv_store_permissions::KVStorePermissions<
-                capsules_extra::tickv_kv_store::TicKVKVStore<
-                    capsules_extra::tickv::TicKVSystem<
-                        capsules_core::virtualizers::virtual_flash::FlashUser<
-                            lowrisc::flash_ctrl::FlashCtrl,
-                        >,
-                        capsules_extra::sip_hash::SipHasher24<'static>,
-                        2048,
-                    >,
-                    capsules_extra::tickv::TicKVKeyType,
-                >,
-            >
-        ),
-    );
+    //let kv_store_permissions = components::kv::KVStorePermissionsComponent::new(kv_store).finalize(
+    //	components::kv_store_permissions_component_static!(
+    //		capsules_extra::tickv_kv_store::TicKVKVStore<
+    //			capsules_extra::tickv::TicKVSystem<
+    //				capsules_core::virtualizers::virtual_flash::FlashUser<
+    //					lowrisc::flash_ctrl::FlashCtrl,
+    //				>,
+    //				capsules_extra::sip_hash::SipHasher24<'static>,
+    //				2048,
+    //			>,
+    //			capsules_extra::tickv::TicKVKeyType,
+    //		>
+    //	),
+    //);
 
-    let virtual_kv_driver = components::kv::VirtualKVPermissionsComponent::new(mux_kv).finalize(
-        components::virtual_kv_permissions_component_static!(
-            capsules_extra::kv_store_permissions::KVStorePermissions<
-                capsules_extra::tickv_kv_store::TicKVKVStore<
-                    capsules_extra::tickv::TicKVSystem<
-                        capsules_core::virtualizers::virtual_flash::FlashUser<
-                            lowrisc::flash_ctrl::FlashCtrl,
-                        >,
-                        capsules_extra::sip_hash::SipHasher24<'static>,
-                        2048,
-                    >,
-                    capsules_extra::tickv::TicKVKeyType,
-                >,
-            >
-        ),
-    );
+    //let mux_kv = components::kv::KVPermissionsMuxComponent::new(kv_store_permissions).finalize(
+    //	components::kv_permissions_mux_component_static!(
+    //		capsules_extra::kv_store_permissions::KVStorePermissions<
+    //			capsules_extra::tickv_kv_store::TicKVKVStore<
+    //				capsules_extra::tickv::TicKVSystem<
+    //					capsules_core::virtualizers::virtual_flash::FlashUser<
+    //						lowrisc::flash_ctrl::FlashCtrl,
+    //					>,
+    //					capsules_extra::sip_hash::SipHasher24<'static>,
+    //					2048,
+    //				>,
+    //				capsules_extra::tickv::TicKVKeyType,
+    //			>,
+    //		>
+    //	),
+    //);
 
-    let kv_driver = components::kv::KVDriverComponent::new(
-        virtual_kv_driver,
-        board_kernel,
-        capsules_extra::kv_driver::DRIVER_NUM,
-    )
-    .finalize(components::kv_driver_component_static!(
-        capsules_extra::virtual_kv::VirtualKVPermissions<
-            capsules_extra::kv_store_permissions::KVStorePermissions<
-                capsules_extra::tickv_kv_store::TicKVKVStore<
-                    capsules_extra::tickv::TicKVSystem<
-                        capsules_core::virtualizers::virtual_flash::FlashUser<
-                            lowrisc::flash_ctrl::FlashCtrl,
-                        >,
-                        capsules_extra::sip_hash::SipHasher24<'static>,
-                        2048,
-                    >,
-                    capsules_extra::tickv::TicKVKeyType,
-                >,
-            >,
-        >
-    ));
+    //let virtual_kv_driver = components::kv::VirtualKVPermissionsComponent::new(mux_kv).finalize(
+    //	components::virtual_kv_permissions_component_static!(
+    //		capsules_extra::kv_store_permissions::KVStorePermissions<
+    //			capsules_extra::tickv_kv_store::TicKVKVStore<
+    //				capsules_extra::tickv::TicKVSystem<
+    //					capsules_core::virtualizers::virtual_flash::FlashUser<
+    //						lowrisc::flash_ctrl::FlashCtrl,
+    //					>,
+    //					capsules_extra::sip_hash::SipHasher24<'static>,
+    //					2048,
+    //				>,
+    //				capsules_extra::tickv::TicKVKeyType,
+    //			>,
+    //		>
+    //	),
+    //);
+
+    //let kv_driver = components::kv::KVDriverComponent::new(
+    //	virtual_kv_driver,
+    //	board_kernel,
+    //	capsules_extra::kv_driver::DRIVER_NUM,
+    //)
+    //.finalize(components::kv_driver_component_static!(
+    //	capsules_extra::virtual_kv::VirtualKVPermissions<
+    //		capsules_extra::kv_store_permissions::KVStorePermissions<
+    //			capsules_extra::tickv_kv_store::TicKVKVStore<
+    //				capsules_extra::tickv::TicKVSystem<
+    //					capsules_core::virtualizers::virtual_flash::FlashUser<
+    //						lowrisc::flash_ctrl::FlashCtrl,
+    //					>,
+    //					capsules_extra::sip_hash::SipHasher24<'static>,
+    //					2048,
+    //				>,
+    //				capsules_extra::tickv::TicKVKeyType,
+    //			>,
+    //		>,
+    //	>
+    //));
+
+    puts("kv_driver initialized.\n");
 
     let mux_otbn = crate::otbn::AccelMuxComponent::new(&peripherals.otbn)
         .finalize(otbn_mux_component_static!());
 
+    puts("mix_otbn created.\n");
+
     let otbn = OtbnComponent::new(&mux_otbn).finalize(crate::otbn_component_static!());
 
     let otbn_rsa_internal_buf = static_init!([u8; 512], [0; 512]);
+
+    puts("Looking for OTBN app.\n");
 
     // Use the OTBN to create an RSA engine
     if let Ok((rsa_imem_start, rsa_imem_length, rsa_dmem_start, rsa_dmem_length)) =
@@ -748,6 +760,8 @@ unsafe fn setup() -> (
     hil::symmetric_encryption::AES128GCM::set_client(gcm_client, aes);
     hil::symmetric_encryption::AES128::set_client(gcm_client, ccm_client);
 
+    puts("AES initialized.\n");
+
     // These symbols are defined in the linker script.
     extern "C" {
         /// Beginning of the ROM region containing app images.
@@ -792,13 +806,60 @@ unsafe fn setup() -> (
             i2c_master,
             spi_controller,
             aes,
-            kv_driver,
             syscall_filter,
             scheduler,
             scheduler_timer,
             watchdog,
         }
     );
+
+    puts("earlgrey initialized.\n");
+
+    let mut mpu_config = rv32i::epmp::PMPConfig::kernel_default();
+
+    // The kernel stack, BSS and relocation data
+    chip.pmp
+        .allocate_kernel_region(
+            &_sstack as *const u8,
+            &_ezero as *const u8 as usize - &_sstack as *const u8 as usize,
+            mpu::Permissions::ReadWriteOnly,
+            &mut mpu_config,
+        )
+        .unwrap();
+    // The kernel text, Manifest and vectors
+    chip.pmp
+        .allocate_kernel_region(
+            &_manifest as *const u8,
+            &_etext as *const u8 as usize - &_manifest as *const u8 as usize,
+            mpu::Permissions::ReadExecuteOnly,
+            &mut mpu_config,
+        )
+        .unwrap();
+    // The app locations
+    chip.pmp.allocate_kernel_region(
+        &_sapps as *const u8,
+        &_eapps as *const u8 as usize - &_sapps as *const u8 as usize,
+        mpu::Permissions::ReadWriteOnly,
+        &mut mpu_config,
+    );
+    // The app memory locations
+    chip.pmp.allocate_kernel_region(
+        &_sappmem as *const u8,
+        &_eappmem as *const u8 as usize - &_sappmem as *const u8 as usize,
+        mpu::Permissions::ReadWriteOnly,
+        &mut mpu_config,
+    );
+    // Access to the MMIO devices
+    chip.pmp
+        .allocate_kernel_region(
+            0x4000_0000 as *const u8,
+            0x900_0000,
+            mpu::Permissions::ReadWriteOnly,
+            &mut mpu_config,
+        )
+        .unwrap();
+
+    chip.pmp.enable_kernel_mpu(&mut mpu_config);
 
     kernel::process::load_processes(
         board_kernel,
@@ -829,7 +890,7 @@ unsafe fn setup() -> (
 /// This function is called from the arch crate after some very basic RISC-V
 /// setup and RAM initialization.
 #[no_mangle]
-pub unsafe fn main() {
+pub unsafe extern "C" fn main() {
     #[cfg(test)]
     test_main();
 
