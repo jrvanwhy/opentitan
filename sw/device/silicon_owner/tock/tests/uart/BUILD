@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("@rules_rust//rust:defs.bzl", "rust_binary")
-load("//rules/opentitan:defs.bzl", "OPENTITAN_CPU", "cw310_params", "fpga_params", "opentitan_test")
+load("//rules/opentitan:defs.bzl", "EARLGREY_SILICON_OWNER_ROM_EXT_ENVS", "OPENTITAN_CPU", "cw310_params", "fpga_params", "opentitan_test", "silicon_params")
 load("//rules:tock.bzl", "tock_elf2tab", "tock_image")
 
 package(default_visibility = ["//visibility:public"])
@@ -30,19 +30,23 @@ tock_elf2tab(
 
 tock_image(
     name = "image",
-    app_flash_start = 0x20040000,
     apps = [":tab"],
     kernel = "//sw/device/silicon_owner/tock/kernel",
+    manifest = "//sw/device/silicon_owner:manifest",
+    rsa_key = {"//sw/device/silicon_creator/rom_ext/sival/keys:keyset": "earlgrey_z0_sival_1"},
 )
 
 opentitan_test(
     name = "uart_test",
-    exec_env = {
-        # TODO: Migrate to a _rom_ext environment once we have Tock successfully
-        # booting in one.
-        "//hw/top_earlgrey:fpga_cw310_test_rom": None,
-    },
+    exec_env = EARLGREY_SILICON_OWNER_ROM_EXT_ENVS,
     fpga = fpga_params(
+        binaries = {":image": "firmware"},
+        test_cmd = """
+            --bootstrap="{firmware}"
+        """,
+        test_harness = "//sw/host/tests/tock/uart",
+    ),
+    silicon = silicon_params(
         binaries = {":image": "firmware"},
         test_cmd = """
             --bootstrap="{firmware}"
