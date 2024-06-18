@@ -357,7 +357,6 @@ silicon(
 
 silicon(
     name = "silicon_owner_sival_rom_ext",
-    testonly = True,
     args = [
         "--rcfile=",
         "--logging=info",
@@ -395,7 +394,6 @@ silicon(
 
 silicon(
     name = "silicon_owner_prodc_rom_ext",
-    testonly = True,
     base = ":silicon_owner_sival_rom_ext",
     exec_env = "silicon_owner_prodc_rom_ext",
     rom_ext = select({
@@ -410,7 +408,6 @@ silicon(
 
 silicon(
     name = "silicon_owner_proda_rom_ext",
-    testonly = True,
     base = ":silicon_owner_sival_rom_ext",
     exec_env = "silicon_owner_proda_rom_ext",
     rom_ext = select({

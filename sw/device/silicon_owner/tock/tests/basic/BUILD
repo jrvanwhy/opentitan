@@ -33,9 +33,9 @@ tock_elf2tab(
 tock_image(
     name = "image",
     apps = [":tab"],
+    exec_env = EARLGREY_SILICON_OWNER_ROM_EXT_ENVS,
     kernel = "//sw/device/silicon_owner/tock/tests:test_kernel",
     manifest = "//sw/device/silicon_owner:manifest",
-    rsa_key = {"//sw/device/silicon_creator/rom_ext/sival/keys:keyset": "earlgrey_z0_sival_1"},
 )
 
 opentitan_test(

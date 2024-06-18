@@ -7,6 +7,8 @@
 
 load("//rules/opentitan:toolchain.bzl", "LOCALTOOLS_TOOLCHAIN")
 load("//rules:signing.bzl", "sign_binary")
+load("@lowrisc_opentitan//rules/opentitan:exec_env.bzl", "ExecEnvInfo")
+load("@lowrisc_opentitan//rules/opentitan:util.bzl", "get_fallback")
 load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain")
 load(
     "//rules:rv.bzl",
@@ -101,57 +103,117 @@ opt_mode = transition(
     outputs = ["//command_line_option:compilation_mode"],
 )
 
+# TODO: Refactor
+def _as_group_info(name, items):
+    """Prepare a dict of files for OutputGroupInfo.
+
+    This renames all of the items to have `name` as a prefix and
+    transforms the values into a depset.
+
+    Args:
+      name: A prefix for each dictionary key.
+      items: A dict str:File to prepare.
+    Returns:
+      dict
+    """
+    groups = {}
+    for k, v in items.items():
+        if not v:
+            continue
+        elif type(v) == "list":
+            # Depset wants a list; nothing to do.
+            pass
+        elif type(v) == "tuple":
+            v = list(v)
+        else:
+            v = [v]
+        groups["{}_{}".format(name, k)] = depset(v)
+    return groups
+
 def _tock_image_impl(ctx):
     cc_toolchain = find_cc_toolchain(ctx).cc
 
-    kernel_binary = ctx.actions.declare_file("{}_kernel.bin".format(ctx.attr.name))
-    image = ctx.actions.declare_file("{}.bin".format(ctx.attr.name))
 
-    ctx.actions.run(
-        outputs = [kernel_binary],
-        inputs = [ctx.file.kernel] + cc_toolchain.all_files.to_list(),
-        arguments = [
-            "--output-target=binary",
-            ctx.file.kernel.path,
-            kernel_binary.path,
-        ],
-        executable = cc_toolchain.objcopy_executable,
-    )
+    providers = []
+    default_info = []
+    groups = {}
+    for exec_env in ctx.attr.exec_env:
+        exec_env = exec_env[ExecEnvInfo]
+        kernel_binary = ctx.actions.declare_file("{}_{}_kernel.bin".format(ctx.attr.name, exec_env.exec_env))
+        ctx.actions.run(
+            outputs = [kernel_binary],
+            inputs = [ctx.file.kernel] + cc_toolchain.all_files.to_list(),
+            arguments = [
+                "--output-target=binary",
+                ctx.file.kernel.path,
+                kernel_binary.path,
+            ],
+            executable = cc_toolchain.objcopy_executable,
+        )
+        image = ctx.actions.declare_file("{}_{}.bin".format(ctx.attr.name, exec_env.exec_env))
+        ctx.actions.run(
+            outputs = [image],
+            inputs = [kernel_binary] + [app[TockApplication].tbf for app in ctx.attr.apps],
+            arguments = [
+                "--rcfile=",
+                "image",
+                "assemble",
+                "--mirror=false",
+                "--output={}".format(image.path),
+                "--size=0x70000",
+                "{}@0".format(kernel_binary.path),
+            ] + ["{}@{}".format(app[TockApplication].tbf.path, app[TockApplication].flash_start - 0x20010000) for app in ctx.attr.apps],
+            executable = ctx.toolchains[LOCALTOOLS_TOOLCHAIN].tools.opentitantool,
+        )
+        manifest = get_fallback(ctx, "file.manifest", exec_env)
+        ecdsa_key = get_fallback(ctx, "attr.ecdsa_key", exec_env)
+        rsa_key = get_fallback(ctx, "attr.rsa_key", exec_env)
+        spx_key = get_fallback(ctx, "attr.spx_key", exec_env)
+        signed = sign_binary(
+            ctx,
+            ctx.toolchains[LOCALTOOLS_TOOLCHAIN].tools.opentitantool,
+            bin = image,
+            ecdsa_key = ecdsa_key,
+            rsa_key = rsa_key,
+            spx_key = spx_key,
+            manifest = manifest,
+        )
+        provides = exec_env.transform(
+            ctx,
+            exec_env,
+            name = "{}_{}".format(ctx.attr.name, exec_env.exec_env),
+            elf = None,
+            binary = image,
+            signed_bin = signed.get("signed"),
+            disassembly = None,
+            mapfile = None,
+        )
+        providers.append(exec_env.provider(**provides))
+        default_info.append(provides["default"])
+        groups.update(_as_group_info(exec_env.exec_env, signed))
+        groups.update(_as_group_info(exec_env.exec_env, provides))
 
-    ctx.actions.run(
-        outputs = [image],
-        inputs = [kernel_binary] + [app[TockApplication].tbf for app in ctx.attr.apps],
-        arguments = [
-            "--rcfile=",
-            "image",
-            "assemble",
-            "--mirror=false",
-            "--output={}".format(image.path),
-            "--size=0x70000",
-            "{}@0".format(kernel_binary.path),
-        ] + ["{}@{}".format(app[TockApplication].tbf.path, app[TockApplication].flash_start - 0x20010000) for app in ctx.attr.apps],
-        executable = ctx.toolchains[LOCALTOOLS_TOOLCHAIN].tools.opentitantool,
-    )
-
-    signed = sign_binary(ctx, ctx.toolchains[LOCALTOOLS_TOOLCHAIN].tools.opentitantool, bin = image)
-    output = signed.get("signed")
-
-    return [
-        DefaultInfo(files = depset([output]), data_runfiles = ctx.runfiles(files = [output])),
-        OutputGroupInfo(
-            bin = depset([output]),
-        ),
-    ]
+    providers.append(DefaultInfo(files = depset(default_info)))
+    providers.append(OutputGroupInfo(**groups))
+    return providers
 
 tock_image = rv_rule(
     implementation = _tock_image_impl,
     attrs = {
-        "kernel": attr.label(mandatory = True, allow_single_file = True, doc = "Kernel ELF file", cfg = opt_mode),
         "apps": attr.label_list(mandatory = True, providers = [TockApplication], doc = "Application TAB labels", cfg = opt_mode),
-        "debug": attr.bool(default = True, doc = "Tockloader debug output"),
         "ecdsa_key": attr.label_keyed_string_dict(
             allow_files = True,
             doc = "ECDSA public key to validate this image",
+        ),
+        "exec_env": attr.label_list(
+            providers = [ExecEnvInfo],
+            doc = "List of execution environments for this target.",
+        ),
+        "kernel": attr.label(mandatory = True, allow_single_file = True, doc = "Kernel ELF file", cfg = opt_mode),
+        "kind": attr.string(
+            doc = "Binary kind: flash, ram or rom",
+            default = "flash",
+            values = ["flash", "ram", "rom"],
         ),
         "manifest": attr.label(allow_single_file = True, mandatory = True),
         "rsa_key": attr.label_keyed_string_dict(
